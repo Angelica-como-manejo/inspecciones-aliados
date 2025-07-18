@@ -4,17 +4,17 @@ import requests
 
 app = Flask(__name__)
 
-# Configuración
+# Configuración actualizada
 JOTFORM_API_KEY = "8d86afa90542339182a9c7c55f8f3411"
 FORM_ID = "251257540772660"
-TOKEN_SEGURIDAD = "TOKEN-FORTOX-2024"
+TOKEN_SEGURIDAD = "CM53071988AK"
 
-# Ruta raíz solo para confirmar que está viva
+# Ruta raíz para confirmar que la API está viva
 @app.route("/", methods=["GET"])
 def home():
     return "✅ La API de inspecciones está corriendo correctamente."
 
-# Ruta protegida con token
+# Ruta protegida que devuelve los datos del formulario
 @app.route("/inspecciones_aliados", methods=["GET"])
 def inspecciones_aliados():
     auth_header = request.headers.get("Authorization")
