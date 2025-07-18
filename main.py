@@ -9,6 +9,12 @@ JOTFORM_API_KEY = "8d86afa90542339182a9c7c55f8f3411"
 FORM_ID = "251257540772660"
 TOKEN_SEGURIDAD = "TOKEN-FORTOX-2024"
 
+# Ruta raíz solo para confirmar que está viva
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ La API de inspecciones está corriendo correctamente."
+
+# Ruta protegida con token
 @app.route("/inspecciones_aliados", methods=["GET"])
 def inspecciones_aliados():
     auth_header = request.headers.get("Authorization")
@@ -45,3 +51,6 @@ def inspecciones_aliados():
 
     df = pd.DataFrame(registros)
     return df.to_json(orient="records", force_ascii=False)
+
+if __name__ == "__main__":
+    app.run()
