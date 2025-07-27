@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 import os
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN
@@ -94,7 +94,7 @@ def inspecciones_aliados():
 # -------------------------------------------------------------------
 # EJECUCIÓN LOCAL / RENDER
 # -------------------------------------------------------------------
-if _name_ == "_main_":
+if _name_ == "__main__":
     # Render asigna el puerto en la variable de entorno PORT
     port = int(os.getenv("PORT", "5000"))
     app.run(debug=True, host="0.0.0.0", port=port)
