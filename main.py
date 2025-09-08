@@ -1,100 +1,103 @@
-# ---------- main.py ----------
-from flask import Flask, request, jsonify
-import pandas as pd
-import requests
-import os
+from flask import Flask, request, jsonify, Response
+import requests, time, json
 
 app = Flask(__name__)
+app.config["JSON_AS_ASCII"] = False
 
-# -------------------------------------------------------------------
-# CONFIGURACIÓN
-# -------------------------------------------------------------------
-JOTFORM_API_KEY  = "8d86afa90542339182a9c7c55f8f3411"   # clave API de Jotform
-FORM_ID          = "251257540772660"                    # ID del formulario
-TOKEN_SEGURIDAD  = "CM53071988AK"                       # token para Authorization
+# --- Configuración ---
+JOTFORM_API_KEY = "8d86afa90542339182a9c7c55f8f3411"
+FORM_ID         = "251257540772660"
+TOKEN_SEGURIDAD = "CM53071988AK"
 
-LIMIT  = 1000  # registros por página
+BASE_JF = f"https://api.jotform.com/form/{FORM_ID}/submissions?apikey={JOTFORM_API_KEY}"
 
-# -------------------------------------------------------------------
-# RUTA DE SALUD
-# -------------------------------------------------------------------
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ La API de inspecciones está corriendo correctamente."
+# --- Utilidades ---
+def autorizado():
+    hdr = request.headers.get("Authorization", "")
+    q   = request.args.get("token")
+    return hdr == f"Bearer {TOKEN_SEGURIDAD}" or q == TOKEN_SEGURIDAD
 
-# -------------------------------------------------------------------
-# RUTA PRINCIPAL
-# -------------------------------------------------------------------
-@app.route("/inspecciones_aliados", methods=["GET"])
-def inspecciones_aliados():
-    # --- Autorización por token ---
-    auth_header = request.headers.get("Authorization")
-    if auth_header != f"Bearer {TOKEN_SEGURIDAD}":
-        return jsonify({"error": "No autorizado"}), 401
+def limpiar_clave(texto):
+    t = (texto or "").lower()
+    for a,b in [("–","-"),("¿",""),("?",""),
+                ("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u"),("ñ","n")]:
+        t = t.replace(a,b)
+    t = "".join(c if (c.isalnum() or c == " ") else "_" for c in t)
+    return "_".join(t.split()).lower()
 
-    # --- Paginación Jotform ---
-    url_base = (
-        f"https://api.jotform.com/form/{FORM_ID}/submissions"
-        f"?apikey={JOTFORM_API_KEY}"
-    )
+def fetch_jotform(limit=400, max_pages=500):
+    """Descarga paginada con timeout y reintentos simples."""
+    session = requests.Session()
+    registros, offset, ultima = [], 0, None
 
-    registros_totales = []
-    offset = 0
+    def get_page(url):
+        for intento in range(3):
+            try:
+                r = session.get(url, timeout=30)
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                app.logger.warning(f"Jotform intento {intento+1}/3: {e}")
+                time.sleep(1 + intento)
+        raise RuntimeError("Jotform sin respuesta tras 3 intentos")
 
-    while True:
-        url = f"{url_base}&limit={LIMIT}&offset={offset}"
-        response = requests.get(url)
-        data = response.json()
-
+    for _ in range(max_pages):
+        url = f"{BASE_JF}&limit={limit}&offset={offset}"
+        data = get_page(url)
         content = data.get("content", [])
         if not content:
             break
+        registros.extend(content)
+        for sub in content:
+            ca = sub.get("created_at")
+            if ca and (ultima is None or ca > ultima):
+                ultima = ca
+        offset += limit
+        if len(content) < limit:
+            break
+        time.sleep(0.2)   # Backoff amable
+    return registros, ultima
 
-        registros_totales.extend(content)
-        offset += LIMIT
+# --- Rutas ---
+@app.get("/")
+def home():
+    return "✅ La API de inspecciones está corriendo correctamente."
 
-    if not registros_totales:
-        return jsonify({"error": "No se encontraron respuestas"}), 500
+@app.get("/status")
+def status():
+    if not autorizado():
+        return jsonify({"error": "No autorizado"}), 401
+    try:
+        _, ultima = fetch_jotform(limit=1, max_pages=1)
+        return jsonify({"ok": True, "ultima_created_at": ultima})
+    except Exception as e:
+        app.logger.exception("STATUS falló")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
-    # --- Procesar cada submission ---
-    registros = []
-    for sub in registros_totales:
-        respuestas = sub.get("answers", {})
-        fila = {}
-        for k, v in respuestas.items():
-            clave = v.get("text", f"campo_{k}")
-            valor = v.get("answer", "")
+@app.get("/inspecciones_aliados")
+def inspecciones_aliados():
+    if not autorizado():
+        return jsonify({"error": "No autorizado"}), 401
+    try:
+        registros_totales, ultima = fetch_jotform(limit=400)
 
-            # Normalizar clave
-            clave_limpia = (
-                clave.lower()
-                .replace("–", "-")
-                .replace("¿", "")
-                .replace("?", "")
-                .replace("á", "a").replace("é", "e").replace("í", "i")
-                .replace("ó", "o").replace("ú", "u").replace("ñ", "n")
-            )
-            # Mantener alfanumérico y espacio; todo lo demás "_"
-            clave_limpia = ''.join(
-                c if c.isalnum() or c == " " else "_" for c in clave_limpia
-            )
-            # Cambiar espacios a "_"
-            clave_limpia = "_".join(clave_limpia.split()).lower()
-            fila[clave_limpia] = valor
+        filas = []
+        for sub in registros_totales:
+            answers = sub.get("answers", {})
+            fila = {}
+            for k, v in answers.items():
+                clave = limpiar_clave(v.get("text", f"campo_{k}"))
+                valor = v.get("answer", "")
+                fila[clave] = valor
+            fila["created_at"] = sub.get("created_at")
+            filas.append(fila)
 
-        registros.append(fila)
+        payload = json.dumps(filas, ensure_ascii=False)
+        app.logger.info(f"[DATA] filas={len(filas)} ultima={ultima}")
+        return Response(payload, mimetype="application/json; charset=utf-8")
+    except Exception as e:
+        app.logger.exception("Fallo en /inspecciones_aliados")
+        return jsonify({"error": "server_error", "detail": str(e)}), 500
 
-    df = pd.DataFrame(registros)
-
-    # Devolver JSON con encabezado correcto
-    return df.to_json(orient="records", force_ascii=False), 200, {
-        "Content-Type": "application/json"
-    }
-
-# -------------------------------------------------------------------
-# EJECUCIÓN LOCAL / RENDER
-# -------------------------------------------------------------------
 if __name__ == "__main__":
-    # Render asigna el puerto en la variable de entorno PORT
-    port = int(os.getenv("PORT", "5000"))
-    app.run(debug=True, host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000, debug=True)
