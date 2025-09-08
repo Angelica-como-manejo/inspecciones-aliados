@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify
 import requests
 import os
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN (usa env vars si existen; si no, toma los defaults)
@@ -75,6 +75,7 @@ def inspecciones_aliados():
 # -------------------------------------------------------------------
 # EJECUCIÓN LOCAL / RENDER
 # -------------------------------------------------------------------
-if _name_ == "_main_":
+if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
     app.run(debug=False, host="0.0.0.0", port=port)
+
