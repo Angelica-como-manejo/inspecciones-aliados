@@ -1,6 +1,5 @@
 # ---------- main.py ----------
 from flask import Flask, request, jsonify
-import pandas as pd
 import requests
 import os
 
@@ -98,3 +97,4 @@ if __name__ == "__main__":
     # Render asigna el puerto en la variable de entorno PORT
     port = int(os.getenv("PORT", "5000"))
     app.run(debug=True, host="0.0.0.0", port=port)
+
