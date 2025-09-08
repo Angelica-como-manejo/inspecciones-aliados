@@ -1,6 +1,4 @@
 Flask==3.0.3
 Werkzeug==3.0.3
 gunicorn==21.2.0
-SQLAlchemy==2.0.32
 requests==2.32.3
-pandas==2.2.2
