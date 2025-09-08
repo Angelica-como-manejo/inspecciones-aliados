@@ -4,7 +4,7 @@ import requests
 import json
 import os
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # -------------------------------------------------------------------
 # CONFIGURACIÓN (lo que ya usas)
@@ -148,3 +148,4 @@ if _name_ == "_main_":
     port = int(os.getenv("PORT", "5000"))
     # host=0.0.0.0 para aceptar tráfico externo
     app.run(host="0.0.0.0", port=port)
+
