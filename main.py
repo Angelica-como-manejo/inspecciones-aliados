@@ -1,84 +1,98 @@
 # ---------- main.py ----------
-from flask import Flask, request, Response, jsonify, stream_with_context
-import requests, os, json
+from flask import Flask, request, jsonify
+import pandas as pd
+import requests
+import os
 
 app = Flask(_name_)
 
-# ---- CONFIG ----
-JOTFORM_API_KEY = "8d86afa90542339182a9c7c55f8f3411"
-FORM_ID         = "251257540772660"
-TOKEN_SEGURIDAD = "CM53071988AK"
+# -------------------------------------------------------------------
+# CONFIGURACIÓN (lee desde variables de entorno en Render)
+# -------------------------------------------------------------------
+JOTFORM_API_KEY  = os.getenv("JOTFORM_API_KEY", "8d86afa90542339182a9c7c55f8f3411")
+FORM_ID          = os.getenv("JOTFORM_FORM_ID", "251257540772660")
+TOKEN_SEGURIDAD  = os.getenv("TOKEN_SEGURIDAD", "CM53071988AK")
 
-# Tamaño de página hacia Jotform (más pequeño = menos RAM; más llamadas)
-LIMIT = int(os.getenv("JT_LIMIT", "300"))  # 300 por defecto
+# límite de registros por página (con fallback a 300)
+LIMIT = int(os.getenv("JT_LIMIT", "300"))
 
-@app.get("/")
+# -------------------------------------------------------------------
+# RUTA DE SALUD
+# -------------------------------------------------------------------
+@app.route("/", methods=["GET"])
 def home():
-    return "✅ API viva"
+    return "✅ La API de inspecciones está corriendo correctamente."
 
-@app.get("/inspecciones_aliados")
+# -------------------------------------------------------------------
+# RUTA PRINCIPAL
+# -------------------------------------------------------------------
+@app.route("/inspecciones_aliados", methods=["GET"])
 def inspecciones_aliados():
-    # Autorización simple por header
-    auth = request.headers.get("Authorization")
-    if auth != f"Bearer {TOKEN_SEGURIDAD}":
+    # --- Autorización por token ---
+    auth_header = request.headers.get("Authorization")
+    if auth_header != f"Bearer {TOKEN_SEGURIDAD}":
         return jsonify({"error": "No autorizado"}), 401
 
-    # Permite sobreescribir tamaño/offset si alguna vez quieres probar
-    limit  = int(request.args.get("limit",  LIMIT))
-    offset = int(request.args.get("offset", 0))
+    # --- Paginación Jotform ---
+    url_base = (
+        f"https://api.jotform.com/form/{FORM_ID}/submissions"
+        f"?apikey={JOTFORM_API_KEY}"
+    )
 
-    url_base = f"https://api.jotform.com/form/{FORM_ID}/submissions?apikey={JOTFORM_API_KEY}"
+    registros_totales = []
+    offset = 0
 
-    def normalize_row(answers: dict):
-        """Convierte el diccionario answers de Jotform a un registro plano."""
-        row = {}
-        for k, v in (answers or {}).items():
-            key  = v.get("text", f"campo_{k}") or f"campo_{k}"
-            val  = v.get("answer", "")
-            # normaliza clave (minúsculas, sin tildes ni signos raros)
-            key = (key.lower()
-                       .replace("–","-").replace("¿","").replace("?","")
-                       .replace("á","a").replace("é","e").replace("í","i")
-                       .replace("ó","o").replace("ú","u").replace("ñ","n"))
-            key = "".join(c if (c.isalnum() or c==" ") else "_" for c in key)
-            key = "_".join(key.split()).lower()
-            row[key] = val
-        return row
+    while True:
+        url = f"{url_base}&limit={LIMIT}&offset={offset}"
+        response = requests.get(url, timeout=180)  # timeout largo para Render
+        data = response.json()
 
-    @stream_with_context
-    def generate():
-        """Devuelve un JSON grande como stream: [ {...},{...}, ... ]"""
-        first = True
-        yield "["
-        cur = offset
-        while True:
-            url = f"{url_base}&limit={limit}&offset={cur}"
-            r = requests.get(url, timeout=60)
-            r.raise_for_status()
-            data = r.json()
-            content = data.get("content", []) or []
+        content = data.get("content", [])
+        if not content:
+            break
 
-            if not content:
-                break
+        registros_totales.extend(content)
+        offset += LIMIT
 
-            for sub in content:
-                row = normalize_row(sub.get("answers"))
-                # Escribe coma entre elementos para JSON válido
-                if not first:
-                    yield ","
-                first = False
-                yield json.dumps(row, ensure_ascii=False)
+    if not registros_totales:
+        return jsonify({"error": "No se encontraron respuestas"}), 500
 
-            # siguiente página
-            cur += limit
+    # --- Procesar cada submission ---
+    registros = []
+    for sub in registros_totales:
+        respuestas = sub.get("answers", {})
+        fila = {}
+        for k, v in respuestas.items():
+            clave = v.get("text", f"campo_{k}")
+            valor = v.get("answer", "")
 
-        yield "]"
+            # Normalizar clave
+            clave_limpia = (
+                clave.lower()
+                .replace("–", "-")
+                .replace("¿", "")
+                .replace("?", "")
+                .replace("á", "a").replace("é", "e").replace("í", "i")
+                .replace("ó", "o").replace("ú", "u").replace("ñ", "n")
+            )
+            clave_limpia = ''.join(
+                c if c.isalnum() or c == " " else "_" for c in clave_limpia
+            )
+            clave_limpia = "_".join(clave_limpia.split()).lower()
+            fila[clave_limpia] = valor
 
-    # Respuesta en streaming = menos RAM, menos timeouts
-    return Response(generate(), mimetype="application/json")
+        registros.append(fila)
 
+    df = pd.DataFrame(registros)
 
+    # Devolver JSON con encabezado correcto
+    return df.to_json(orient="records", force_ascii=False), 200, {
+        "Content-Type": "application/json"
+    }
+
+# -------------------------------------------------------------------
+# EJECUCIÓN LOCAL / RENDER
+# -------------------------------------------------------------------
 if _name_ == "_main_":
     port = int(os.getenv("PORT", "5000"))
-    # Un solo worker/threads en local
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(debug=True, host="0.0.0.0", port=port)
